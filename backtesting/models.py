@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from config.settings import settings
 
 from data.symbols import normalize_symbol
 
@@ -15,7 +16,7 @@ class BacktestConfig:
     symbol: str
     initial_cash: Decimal
     quantity: Decimal = Decimal("1")
-    commission_rate: Decimal = Decimal("0.001")
+    commission_rate: Decimal = settings.commission_rate
     slippage: Decimal = Decimal("0")
     start_date: Optional[object] = None
     end_date: Optional[object] = None
@@ -88,8 +89,41 @@ class EquityPoint:
     timestamp: datetime
     close: Decimal
     cash: Decimal
+    position_quantity: Decimal
+    position_market_value: Decimal
+    total_equity: Decimal
+
+    @property
+    def quantity(self) -> Decimal:
+        return self.position_quantity
+
+    @property
+    def equity(self) -> Decimal:
+        return self.total_equity
+
+
+@dataclass(frozen=True)
+class ClosedTrade:
+    symbol: str
+    side: str
     quantity: Decimal
-    equity: Decimal
+    entry_time: datetime
+    exit_time: datetime
+    entry_price: Decimal
+    exit_price: Decimal
+    pnl: Decimal
+
+
+@dataclass(frozen=True)
+class BacktestMetrics:
+    total_return: Decimal
+    annualized_return: Decimal
+    max_drawdown: Decimal
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: Optional[Decimal]
+    profit_loss_ratio: Optional[Decimal]
 
 
 @dataclass(frozen=True)
@@ -101,5 +135,7 @@ class BacktestResult:
     orders: List[BacktestOrder]
     executions: List[BacktestExecution]
     equity_curve: List[EquityPoint]
+    closed_trades: List[ClosedTrade]
+    metrics: BacktestMetrics
     rejected_signals: List[Dict[str, Any]]
     visible_timestamps: List[datetime]

@@ -5,9 +5,11 @@ from backtesting.execution import BacktestExecutionAdapter
 from backtesting.models import (
     BacktestConfig,
     BacktestExecution,
+    BacktestMetrics,
     BacktestOrder,
     BacktestPortfolio,
     BacktestResult,
+    ClosedTrade,
     EquityPoint,
 )
 
@@ -16,8 +18,10 @@ __all__ = [
     "BacktestEngine",
     "BacktestExecutionAdapter",
     "BacktestExecution",
+    "BacktestMetrics",
     "BacktestOrder",
     "BacktestPortfolio",
     "BacktestResult",
+    "ClosedTrade",
     "EquityPoint",
 ]

@@ -184,3 +184,53 @@ def test_result_contains_equity_curve_and_structured_ledger_fields():
     assert result.equity_curve[0].timestamp < result.equity_curve[-1].timestamp
     assert result.orders[0].order_id == result.executions[0].order_id
     assert result.orders[0].status == "FILLED"
+
+
+def test_equity_curve_has_complete_mark_to_market_fields_and_is_time_sorted():
+    result, _ = run()
+    point = result.equity_curve[1]
+    assert point.timestamp < result.equity_curve[-1].timestamp
+    assert point.cash == Decimal("979.980")
+    assert point.position_quantity == Decimal("1")
+    assert point.position_market_value == Decimal("21")
+    assert point.total_equity == Decimal("1000.980")
+
+
+def test_open_position_is_not_counted_as_closed_trade_but_is_marked_finally():
+    result, _ = run()
+    assert result.closed_trades == []
+    assert result.metrics.total_trades == 0
+    assert result.final_equity == Decimal("1019.980")
+    assert result.metrics.winning_trades == 0
+    assert result.metrics.losing_trades == 0
+    assert result.metrics.win_rate is None
+
+
+def test_closed_trade_metrics_use_only_realized_trades():
+    result, _ = run(BuyThenSell(), commission_rate=Decimal("0"))
+    metrics = result.metrics
+    assert len(result.closed_trades) == 1
+    assert result.closed_trades[0].pnl == Decimal("20")
+    assert metrics.total_trades == 1
+    assert metrics.winning_trades == 1
+    assert metrics.losing_trades == 0
+    assert metrics.win_rate == Decimal("1")
+    assert metrics.profit_loss_ratio is None
+    assert metrics.total_return == Decimal("0.02")
+
+
+def test_annualized_return_uses_actual_curve_span_and_drawdown():
+    result, _ = run(BuyThenSell(), commission_rate=Decimal("0"))
+    assert result.metrics.annualized_return > Decimal("0")
+    assert result.metrics.max_drawdown >= Decimal("0")
+
+
+def test_metrics_are_safe_for_empty_curve():
+    data = FakeMarketData([])
+    result = BacktestEngine(data, BuyOnFirstVisibleBar()).run(
+        BacktestConfig("600000", Decimal("1000"))
+    )
+    assert result.metrics.total_return == Decimal("0")
+    assert result.metrics.annualized_return == Decimal("0")
+    assert result.metrics.max_drawdown == Decimal("0")
+    assert result.metrics.total_trades == 0
