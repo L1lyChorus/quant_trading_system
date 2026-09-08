@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from backtesting import BacktestConfig, BacktestEngine
+from backtesting import (
+    BacktestConfig,
+    BacktestEngine,
+    BacktestExecutionTiming,
+    BacktestOrderStatus,
+)
 from database.connection import initialize_database
 from database.models import Account, MarketBar
 from risk_management.models import RiskResult
@@ -100,7 +105,7 @@ def test_config_canonicalizes_symbol_and_service_filters_final_bars_at_boundary(
 def test_signal_sees_only_current_and_prior_bars_and_fill_is_next_open():
     strategy = BuyOnFirstVisibleBar()
     result, _ = run(strategy)
-    assert [len(frame) for frame in strategy.frames] == [1, 2]
+    assert [len(frame) for frame in strategy.frames] == [1, 2, 3]
     assert result.executions[0].executed_at.date().isoformat() == "2024-01-02"
     assert result.executions[0].price == Decimal("20")
 
@@ -117,9 +122,9 @@ def test_signal_close_is_not_used_as_fill_price_and_future_data_is_not_visible()
 
 def test_commission_and_slippage_are_applied_in_memory():
     result, _ = run(commission_rate=Decimal("0.1"), slippage=Decimal("1"))
-    assert result.executions[0].price == Decimal("21")
-    assert result.executions[0].commission == Decimal("2.1")
-    assert result.final_cash == Decimal("976.9")
+    assert result.executions[0].price == Decimal("40")
+    assert result.executions[0].commission == Decimal("4.0")
+    assert result.final_cash == Decimal("956.0")
 
 
 def test_hold_creates_no_order_and_risk_rejection_creates_no_execution():
@@ -164,7 +169,8 @@ def test_backtest_does_not_touch_paper_sqlite():
 
 def test_sell_uses_in_memory_position_and_records_both_legs():
     result, _ = run(BuyThenSell(), commission_rate=Decimal("0"))
-    assert [order.side for order in result.orders] == ["BUY", "SELL"]
+    assert [order.side for order in result.orders] == ["BUY", "SELL", "SELL"]
+    assert result.orders[-1].status is BacktestOrderStatus.CANCELLED
     assert [execution.executed_at.date().isoformat() for execution in result.executions] == [
         "2024-01-02", "2024-01-04"
     ]
@@ -184,6 +190,60 @@ def test_result_contains_equity_curve_and_structured_ledger_fields():
     assert result.equity_curve[0].timestamp < result.equity_curve[-1].timestamp
     assert result.orders[0].order_id == result.executions[0].order_id
     assert result.orders[0].status == "FILLED"
+
+
+def test_execution_timing_and_result_audit_metadata_are_configured():
+    config = BacktestConfig("600000", Decimal("1000"))
+    result, _ = run()
+    assert config.execution_timing is BacktestExecutionTiming.NEXT_BAR_OPEN
+    assert result.config == config
+    assert result.bar_count == 3
+    assert result.start_time == result.equity_curve[0].timestamp
+    assert result.end_time == result.equity_curve[-1].timestamp
+    assert result.order_count == len(result.orders)
+    assert result.execution_count == len(result.executions)
+    assert result.cancelled_count == 0
+
+
+def test_zero_slippage_is_exact_next_open_and_runs_are_reproducible():
+    first, _ = run(commission_rate=Decimal("0"), slippage=Decimal("0"))
+    second, _ = run(commission_rate=Decimal("0"), slippage=Decimal("0"))
+    assert first.executions[0].price == Decimal("20")
+    assert first.orders == second.orders
+    assert first.executions == second.executions
+
+
+def test_config_controls_intraday_visibility_but_execution_still_uses_next_final_bar():
+    result, data = run(finalized_only=False)
+    assert data.calls[0][3] is False
+    assert result.bar_count == 4
+    assert all(execution.executed_at.date().isoformat() != "2024-01-03"
+               for execution in result.executions)
+
+
+def test_invalid_non_positive_execution_price_is_rejected():
+    from backtesting.execution import BacktestExecutionAdapter
+    from backtesting.models import BacktestPortfolio
+
+    adapter = BacktestExecutionAdapter(
+        BacktestConfig("600000", Decimal("1000")), BacktestPortfolio(Decimal("1000"))
+    )
+    try:
+        adapter.execute(
+            SignalAction.BUY,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 2, tzinfo=timezone.utc),
+            Decimal("0"), Decimal("1"), "invalid", 1,
+        )
+    except ValueError as exc:
+        assert "greater than 0" in str(exc)
+    else:
+        raise AssertionError("non-positive execution price was accepted")
+
+
+def test_sell_slippage_uses_lower_next_open_price():
+    result, _ = run(BuyThenSell(), commission_rate=Decimal("0"), slippage=Decimal("0.1"))
+    assert result.executions[1].price == Decimal("36")
 
 
 def test_equity_curve_has_complete_mark_to_market_fields_and_is_time_sorted():

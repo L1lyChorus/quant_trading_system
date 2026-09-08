@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from uuid import uuid4
-
 from backtesting.models import (
     BacktestConfig,
     BacktestExecution,
     BacktestOrder,
     BacktestPortfolio,
+    BacktestOrderStatus,
 )
 from strategies.signals import SignalAction
 
@@ -30,20 +29,38 @@ class BacktestExecutionAdapter:
         open_price: Decimal,
         quantity: Decimal,
         reason: str,
+        sequence: int,
     ):
         side = action.value
-        fill_price = open_price + self.config.slippage if action == SignalAction.BUY else open_price - self.config.slippage
+        if open_price <= 0:
+            raise ValueError("execution price must be greater than 0")
+        multiplier = (
+            Decimal("1") + self.config.slippage
+            if action == SignalAction.BUY
+            else Decimal("1") - self.config.slippage
+        )
+        if multiplier <= 0:
+            raise ValueError("slippage results in a non-positive execution price")
+        fill_price = open_price * multiplier
         fee = fill_price * quantity * self.config.commission_rate
         order = BacktestOrder(
-            str(uuid4()), self.config.symbol, side, quantity, signal_time,
-            execution_time, "FILLED", reason,
+            "backtest-order-{}".format(sequence), self.config.symbol, side, quantity,
+            signal_time, execution_time, BacktestOrderStatus.FILLED, reason,
         )
         if action == SignalAction.BUY:
             self.portfolio.apply_buy(quantity, fill_price, fee)
         else:
             realized_pnl = self.portfolio.apply_sell(quantity, fill_price, fee)
         execution = BacktestExecution(
-            str(uuid4()), order.order_id, self.config.symbol, side, quantity,
+            "backtest-execution-{}".format(sequence), order.order_id,
+            self.config.symbol, side, quantity,
             fill_price, fee, execution_time,
         )
         return order, execution, (realized_pnl if action == SignalAction.SELL else Decimal("0"))
+
+    def cancel(self, action, signal_time, reason, sequence):
+        return BacktestOrder(
+            "backtest-order-{}".format(sequence), self.config.symbol, action.value,
+            self.config.quantity, signal_time, signal_time,
+            BacktestOrderStatus.CANCELLED, reason,
+        )

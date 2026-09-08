@@ -17,6 +17,7 @@ from backtesting.models import (
     BacktestMetrics,
     ClosedTrade,
     EquityPoint,
+    BacktestOrderStatus,
 )
 from data.service import MarketDataService
 from data.validation import validate_market_data
@@ -40,9 +41,9 @@ class BacktestEngine:
 
     def run(self, config: BacktestConfig) -> BacktestResult:
         bars = self.market_data.get_historical_bars(
-            config.symbol, config.start_date, config.end_date, True
+            config.symbol, config.start_date, config.end_date, config.finalized_only
         )
-        frame = self._frame(bars, True)
+        frame = self._frame(bars, config.finalized_only)
         portfolio = BacktestPortfolio(config.initial_cash)
         adapter = BacktestExecutionAdapter(config, portfolio)
         orders: List[BacktestOrder] = []
@@ -53,6 +54,7 @@ class BacktestEngine:
         closed_trades = []
         entry_time = None
         entry_price = Decimal("0")
+        sequence = 0
 
         for index, row in frame.iterrows():
             visible = frame.iloc[: index + 1].copy()
@@ -66,15 +68,26 @@ class BacktestEngine:
                     portfolio.equity(Decimal(str(row["close"]))),
                 )
             )
-            if index >= len(frame) - 1:
-                continue
             signal = self.strategy.generate_signal(
                 visible, config.symbol, current_position=portfolio,
                 simulation_time=timestamp, cutoff=timestamp,
             )
             if signal.action == SignalAction.HOLD:
                 continue
-            next_row = frame.iloc[index + 1]
+            sequence += 1
+            next_index = next(
+                (
+                    candidate for candidate in range(index + 1, len(frame))
+                    if frame.iloc[candidate]["bar_status"] == "FINAL"
+                ),
+                None,
+            )
+            if next_index is None:
+                orders.append(adapter.cancel(
+                    signal.action, timestamp, "no next finalized bar", sequence
+                ))
+                continue
+            next_row = frame.iloc[next_index]
             next_open = Decimal(str(next_row["open"]))
             risk = self.risk_evaluator.evaluate_trade(
                 {"current_cash": portfolio.cash},
@@ -95,7 +108,7 @@ class BacktestEngine:
             order, execution, realized_pnl = adapter.execute(
                 signal.action, timestamp,
                 next_row["datetime"].to_pydatetime(),
-                next_open, config.quantity, signal.reason,
+                next_open, config.quantity, signal.reason, sequence,
             )
             orders.append(order)
             executions.append(execution)
@@ -117,9 +130,13 @@ class BacktestEngine:
         final_equity = portfolio.equity(final_price) if len(frame) else portfolio.cash
         metrics = self._metrics(config.initial_cash, final_equity, equity_curve, closed_trades)
         return BacktestResult(
-            config.symbol, config.initial_cash, portfolio.cash, final_equity,
+            config, config.symbol, config.initial_cash, portfolio.cash, final_equity,
             orders, executions, equity_curve, closed_trades, metrics,
             rejected, visible_timestamps,
+            equity_curve[0].timestamp if equity_curve else None,
+            equity_curve[-1].timestamp if equity_curve else None,
+            len(frame), len(orders), len(executions),
+            sum(1 for order in orders if order.status == BacktestOrderStatus.CANCELLED),
         )
 
     @staticmethod
@@ -159,18 +176,26 @@ class BacktestEngine:
     def _frame(bars: list, finalized_only: bool) -> pd.DataFrame:
         if not bars:
             return pd.DataFrame(
-                columns=["symbol", "datetime", "open", "high", "low", "close", "volume"]
+                columns=[
+                    "symbol", "datetime", "open", "high", "low", "close",
+                    "volume", "bar_status",
+                ]
             )
         frame = pd.DataFrame([
             {
                 "symbol": bar.symbol, "datetime": bar.datetime,
                 "open": bar.open, "high": bar.high, "low": bar.low,
                 "close": bar.close, "volume": bar.volume,
+                "bar_status": bar.bar_status,
             }
             for bar in bars if not finalized_only or bar.bar_status == "FINAL"
         ])
         if frame.empty:
             return frame
-        return validate_market_data(frame).sort_values(
-            "datetime", kind="stable"
-        ).reset_index(drop=True)
+        normalized = validate_market_data(frame)
+        normalized = normalized.merge(
+            frame[["symbol", "datetime", "bar_status"]],
+            on=["symbol", "datetime"],
+            how="left",
+        )
+        return normalized.sort_values("datetime", kind="stable").reset_index(drop=True)

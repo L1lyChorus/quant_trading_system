@@ -5,10 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Dict, List, Optional
 from config.settings import settings
 
 from data.symbols import normalize_symbol
+
+
+class BacktestExecutionTiming(str, Enum):
+    NEXT_BAR_OPEN = "NEXT_BAR_OPEN"
+
+
+class BacktestOrderStatus(str, Enum):
+    PENDING = "PENDING"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
 
 
 @dataclass(frozen=True)
@@ -18,6 +29,7 @@ class BacktestConfig:
     quantity: Decimal = Decimal("1")
     commission_rate: Decimal = settings.commission_rate
     slippage: Decimal = Decimal("0")
+    execution_timing: BacktestExecutionTiming = BacktestExecutionTiming.NEXT_BAR_OPEN
     start_date: Optional[object] = None
     end_date: Optional[object] = None
     finalized_only: bool = True
@@ -28,6 +40,10 @@ class BacktestConfig:
         object.__setattr__(self, "quantity", Decimal(self.quantity))
         object.__setattr__(self, "commission_rate", Decimal(self.commission_rate))
         object.__setattr__(self, "slippage", Decimal(self.slippage))
+        object.__setattr__(
+            self, "execution_timing",
+            BacktestExecutionTiming(self.execution_timing),
+        )
         if self.initial_cash <= 0 or self.quantity <= 0:
             raise ValueError("initial_cash and quantity must be greater than 0")
         if self.commission_rate < 0 or self.slippage < 0:
@@ -68,7 +84,7 @@ class BacktestOrder:
     quantity: Decimal
     signal_time: datetime
     execution_time: datetime
-    status: str
+    status: BacktestOrderStatus
     reason: str
 
 
@@ -128,6 +144,7 @@ class BacktestMetrics:
 
 @dataclass(frozen=True)
 class BacktestResult:
+    config: BacktestConfig
     symbol: str
     initial_cash: Decimal
     final_cash: Decimal
@@ -139,3 +156,9 @@ class BacktestResult:
     metrics: BacktestMetrics
     rejected_signals: List[Dict[str, Any]]
     visible_timestamps: List[datetime]
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    bar_count: int
+    order_count: int
+    execution_count: int
+    cancelled_count: int
