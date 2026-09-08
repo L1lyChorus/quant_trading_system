@@ -6,7 +6,7 @@ import logging
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -27,7 +27,26 @@ class Database:
 
     def initialize(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._migrate_sqlite_market_bars()
         logger.info("Database initialized")
+
+    def _migrate_sqlite_market_bars(self) -> None:
+        """Add market-data columns to existing SQLite databases without touching trading tables."""
+        if self.engine.dialect.name != "sqlite":
+            return
+        inspector = inspect(self.engine)
+        if "market_bars" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("market_bars")}
+        if "bar_status" in columns:
+            return
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE market_bars "
+                    "ADD COLUMN bar_status VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN'"
+                )
+            )
 
     @contextmanager
     def session(self) -> Iterator[Session]:
