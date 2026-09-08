@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from config.settings import settings
 from risk_management.models import RiskResult
+from data.symbols import normalize_symbol
 
 ZERO = Decimal("0")
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9._-]+$")
@@ -43,7 +44,11 @@ def _position_values(current_positions: Any) -> Iterable[Tuple[str, Decimal]]:
     for symbol, quantity in items:
         parsed_quantity = _decimal(quantity)
         if symbol is not None and parsed_quantity is not None:
-            result.append((str(symbol).strip().upper(), parsed_quantity))
+            try:
+                canonical = normalize_symbol(symbol)
+            except ValueError:
+                canonical = str(symbol).strip()
+            result.append((canonical, parsed_quantity))
     return result
 
 
@@ -73,7 +78,10 @@ class RiskEvaluator:
     ) -> RiskResult:
         reasons: List[str] = []
         rules: List[Dict[str, Any]] = []
-        normalized_symbol = str(symbol).strip().upper() if symbol is not None else ""
+        try:
+            normalized_symbol = normalize_symbol(symbol) if symbol is not None else ""
+        except ValueError:
+            normalized_symbol = str(symbol).strip()
         normalized_side = str(side).strip().upper() if side is not None else ""
         parsed_quantity = _decimal(quantity)
         parsed_price = _decimal(price)

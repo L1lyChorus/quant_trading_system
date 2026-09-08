@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.models import Account, Execution, Order, Position
+from data.symbols import normalize_symbol
 
 
 class TradingRepository:
@@ -37,6 +38,7 @@ class TradingRepository:
         return execution
 
     def get_position(self, account_id: int, symbol: str) -> Optional[Position]:
+        symbol = normalize_symbol(symbol)
         return self.session.scalar(
             select(Position).where(
                 Position.account_id == account_id, Position.symbol == symbol

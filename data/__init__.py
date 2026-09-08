@@ -24,6 +24,7 @@ from data.historical import (
     SinaHistoricalDataProvider,
     UserCSVHistoricalDataProvider,
 )
+from data.service import MarketDataService
 
 __all__ = [
     "DuplicatePolicy",
@@ -52,4 +53,5 @@ __all__ = [
     "EastmoneyHistoricalDataProvider",
     "SinaHistoricalDataProvider",
     "PrimaryFallbackHistoricalDataProvider",
+    "MarketDataService",
 ]

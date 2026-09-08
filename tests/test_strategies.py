@@ -91,6 +91,15 @@ def test_signal_shape_and_metadata():
     }
 
 
+def test_strategy_matches_six_digit_and_canonical_symbols():
+    data = market([5, 4, 3, 3, 7], symbol="600000")
+    signal = MovingAverageCrossoverStrategy(2, 3).generate_signal(
+        data, "600000.SH"
+    )
+    assert signal.symbol == "600000.SH"
+    assert signal.action == SignalAction.BUY
+
+
 def test_cutoff_excludes_future_rows():
     data = market([5, 4, 3, 3, 7])
     signal = MovingAverageCrossoverStrategy(2, 3).generate_signal(

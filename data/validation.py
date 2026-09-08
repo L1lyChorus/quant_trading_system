@@ -18,7 +18,7 @@ REQUIRED_COLUMNS = (
     "close",
     "volume",
 )
-_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9._-]+$")
+_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9._-]+$", re.IGNORECASE)
 
 
 class DataValidationError(ValueError):
@@ -26,7 +26,7 @@ class DataValidationError(ValueError):
 
 
 def _normalize_symbols(symbols: pd.Series) -> pd.Series:
-    normalized = symbols.astype("string").str.strip().str.upper()
+    normalized = symbols.astype("string").str.strip()
     invalid = normalized.isna() | (normalized == "") | ~normalized.str.match(
         _SYMBOL_PATTERN, na=False
     )
