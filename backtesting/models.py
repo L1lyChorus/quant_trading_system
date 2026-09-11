@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from config.settings import settings
 
 from data.symbols import normalize_symbol
@@ -24,7 +24,7 @@ class BacktestOrderStatus(str, Enum):
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    symbol: str
+    symbol: Any
     initial_cash: Decimal
     quantity: Decimal = Decimal("1")
     commission_rate: Decimal = settings.commission_rate
@@ -33,9 +33,15 @@ class BacktestConfig:
     start_date: Optional[object] = None
     end_date: Optional[object] = None
     finalized_only: bool = True
+    symbols: tuple = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "symbol", normalize_symbol(self.symbol))
+        raw_symbols = self.symbol if isinstance(self.symbol, (list, tuple)) else [self.symbol]
+        canonical_symbols = tuple(sorted({normalize_symbol(symbol) for symbol in raw_symbols}))
+        if not canonical_symbols:
+            raise ValueError("at least one symbol is required")
+        object.__setattr__(self, "symbol", canonical_symbols[0])
+        object.__setattr__(self, "symbols", canonical_symbols)
         object.__setattr__(self, "initial_cash", Decimal(self.initial_cash))
         object.__setattr__(self, "quantity", Decimal(self.quantity))
         object.__setattr__(self, "commission_rate", Decimal(self.commission_rate))
@@ -55,6 +61,52 @@ class BacktestPortfolio:
     cash: Decimal
     quantity: Decimal = Decimal("0")
     average_cost: Decimal = Decimal("0")
+    positions: Dict[str, Decimal] = field(default_factory=dict)
+    average_costs: Dict[str, Decimal] = field(default_factory=dict)
+
+    def quantity_for(self, symbol: str) -> Decimal:
+        return self.positions.get(symbol, Decimal("0"))
+
+    def average_cost_for(self, symbol: str) -> Decimal:
+        return self.average_costs.get(symbol, Decimal("0"))
+
+    def apply_buy_for(self, symbol: str, quantity: Decimal, price: Decimal, fee: Decimal) -> None:
+        old_quantity = self.quantity_for(symbol)
+        total = old_quantity * self.average_cost_for(symbol) + quantity * price + fee
+        self.positions[symbol] = old_quantity + quantity
+        self.average_costs[symbol] = total / self.positions[symbol]
+        self.cash -= quantity * price + fee
+        self._sync_single(symbol)
+
+    def apply_sell_for(self, symbol: str, quantity: Decimal, price: Decimal, fee: Decimal) -> Decimal:
+        old_quantity = self.quantity_for(symbol)
+        if quantity > old_quantity:
+            raise ValueError("insufficient backtest position")
+        pnl = (price - self.average_cost_for(symbol)) * quantity - fee
+        remaining = old_quantity - quantity
+        if remaining:
+            self.positions[symbol] = remaining
+        else:
+            self.positions.pop(symbol, None)
+            self.average_costs.pop(symbol, None)
+        self.cash += quantity * price - fee
+        self._sync_single(symbol)
+        return pnl
+
+    def _sync_single(self, symbol: str) -> None:
+        if len(self.positions) == 1 and symbol in self.positions:
+            self.quantity = self.positions[symbol]
+            self.average_cost = self.average_costs[symbol]
+        elif not self.positions:
+            self.quantity = Decimal("0")
+            self.average_cost = Decimal("0")
+
+    def total_market_value(self, marks: Dict[str, Decimal]) -> Decimal:
+        return sum(
+            (quantity * marks[symbol] for symbol, quantity in self.positions.items()
+             if symbol in marks),
+            Decimal("0"),
+        )
 
     def apply_buy(self, quantity: Decimal, price: Decimal, fee: Decimal) -> None:
         total = self.quantity * self.average_cost + quantity * price + fee
@@ -162,3 +214,4 @@ class BacktestResult:
     order_count: int
     execution_count: int
     cancelled_count: int
+    positions: Dict[str, Decimal]

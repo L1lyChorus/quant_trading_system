@@ -294,3 +294,99 @@ def test_metrics_are_safe_for_empty_curve():
     assert result.metrics.annualized_return == Decimal("0")
     assert result.metrics.max_drawdown == Decimal("0")
     assert result.metrics.total_trades == 0
+
+
+def multi_bars():
+    def make(symbol, values):
+        return [
+            SimpleNamespace(
+                symbol=symbol, datetime=pd.Timestamp(day, tz="UTC").to_pydatetime(),
+                open=open_, high=open_, low=open_, close=close, volume=100,
+                bar_status="FINAL",
+            )
+            for day, open_, close in values
+        ]
+    return {
+        "600000.SH": make("600000.SH", [
+            ("2024-01-01", 10, 10), ("2024-01-02", 20, 20),
+            ("2024-01-04", 40, 40),
+        ]),
+        "000001.SZ": make("000001.SZ", [
+            ("2024-01-01", 5, 5), ("2024-01-03", 8, 8),
+        ]),
+    }
+
+
+class MultiMarketData:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    def get_historical_bars(self, symbol, start_date=None, end_date=None, finalized_only=True):
+        self.calls.append((symbol, finalized_only))
+        return self.rows[symbol]
+
+
+class BuyEachSymbol:
+    def __init__(self):
+        self.calls = []
+
+    def generate_signal(self, market_data, symbol, **kwargs):
+        self.calls.append((symbol, market_data.copy()))
+        return Signal(
+            "{}-buy".format(symbol), symbol, SignalAction.BUY,
+            market_data.iloc[-1]["datetime"].to_pydatetime(), 1,
+            "multi", "buy", {},
+        )
+
+
+def multi_run(strategy=None, **kwargs):
+    data = MultiMarketData(multi_bars())
+    result = BacktestEngine(
+        data, strategy or BuyEachSymbol()
+    ).run(BacktestConfig(["000001", "600000.SH"], Decimal("100"), **kwargs))
+    return result, data
+
+
+def test_multi_asset_uses_sorted_symbols_shared_cash_and_deterministic_ordering():
+    result, data = multi_run()
+    assert [call[0] for call in data.calls] == ["000001.SZ", "600000.SH"]
+    assert [order.symbol for order in result.orders if order.status == BacktestOrderStatus.FILLED] == [
+        "600000.SH", "000001.SZ"
+    ]
+    assert {order.order_id for order in result.orders if order.status == BacktestOrderStatus.FILLED} == {
+        "backtest-order-1", "backtest-order-2"
+    }
+    assert result.positions == {"000001.SZ": Decimal("1"), "600000.SH": Decimal("1")}
+
+
+def test_multi_asset_timeline_has_missing_bars_without_fabrication_and_marks_latest():
+    result, _ = multi_run()
+    timestamps = [point.timestamp.date().isoformat() for point in result.equity_curve]
+    assert timestamps == ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"]
+    assert result.equity_curve[2].position_market_value == Decimal("28")
+    assert result.equity_curve[-1].total_equity == Decimal("119.972")
+
+
+def test_multi_asset_each_symbol_sees_only_its_own_past_and_final_filter():
+    result, _ = multi_run()
+    strategy = BuyEachSymbol()
+    data = MultiMarketData(multi_bars())
+    BacktestEngine(data, strategy).run(
+        BacktestConfig(["600000", "000001"], Decimal("100"), finalized_only=True)
+    )
+    for symbol, frame in strategy.calls:
+        assert frame["datetime"].is_monotonic_increasing
+        assert frame["symbol"].nunique() == 1
+        assert frame["symbol"].iloc[0] == symbol
+    assert result.bar_count == 4
+
+
+def test_multi_asset_result_is_reproducible_and_single_api_remains_compatible():
+    first, _ = multi_run()
+    second, _ = multi_run()
+    assert first.orders == second.orders
+    assert first.executions == second.executions
+    single, _ = run()
+    assert single.symbol == "600000.SH"
+    assert single.positions == {"600000.SH": Decimal("1")}

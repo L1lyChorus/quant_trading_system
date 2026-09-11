@@ -40,10 +40,19 @@ class BacktestEngine:
         self.risk_evaluator = risk_evaluator or RiskEvaluator()
 
     def run(self, config: BacktestConfig) -> BacktestResult:
-        bars = self.market_data.get_historical_bars(
-            config.symbol, config.start_date, config.end_date, config.finalized_only
-        )
-        frame = self._frame(bars, config.finalized_only)
+        frames = {}
+        for symbol in config.symbols:
+            frames[symbol] = self._frame(
+                self.market_data.get_historical_bars(
+                    symbol, config.start_date, config.end_date, config.finalized_only
+                ),
+                config.finalized_only,
+            )
+        timeline = sorted({
+            row["datetime"]
+            for frame in frames.values()
+            for _, row in frame.iterrows()
+        })
         portfolio = BacktestPortfolio(config.initial_cash)
         adapter = BacktestExecutionAdapter(config, portfolio)
         orders: List[BacktestOrder] = []
@@ -52,82 +61,89 @@ class BacktestEngine:
         equity_curve = []
         visible_timestamps = []
         closed_trades = []
-        entry_time = None
-        entry_price = Decimal("0")
+        entries = {}
         sequence = 0
+        self._pending = []
 
-        for index, row in frame.iterrows():
-            visible = frame.iloc[: index + 1].copy()
-            timestamp = row["datetime"].to_pydatetime()
+        for timestamp_value in timeline:
+            timestamp = timestamp_value.to_pydatetime()
+            pending = [
+                item for item in getattr(self, "_pending", [])
+                if item[0] == timestamp_value
+            ]
+            self._pending = [item for item in getattr(self, "_pending", []) if item[0] != timestamp_value]
+            for _, symbol, signal, signal_time, sequence_number in pending:
+                row = frames[symbol][frames[symbol]["datetime"] == timestamp_value].iloc[0]
+                next_open = Decimal(str(row["open"]))
+                risk = self.risk_evaluator.evaluate_trade(
+                    {"current_cash": portfolio.cash}, symbol, signal.action.value,
+                    config.quantity, next_open,
+                    {name: portfolio.quantity_for(name) for name in config.symbols},
+                )
+                if not risk.allowed:
+                    rejected.append({
+                        "signal_id": signal.signal_id, "timestamp": signal_time,
+                        "action": signal.action.value, "reasons": list(risk.reasons),
+                    })
+                    continue
+                order, execution, realized_pnl = adapter.execute(
+                    signal.action, signal_time, timestamp, next_open,
+                    config.quantity, signal.reason, sequence_number, symbol,
+                )
+                orders.append(order)
+                executions.append(execution)
+                if signal.action == SignalAction.BUY:
+                    entries[symbol] = (execution.executed_at, execution.price)
+                elif signal.action == SignalAction.SELL and symbol in entries:
+                    entry_time, entry_price = entries.pop(symbol)
+                    closed_trades.append(ClosedTrade(
+                        symbol, "BUY_SELL", execution.quantity, entry_time,
+                        execution.executed_at, entry_price, execution.price, realized_pnl,
+                    ))
+
+            marks = {}
+            for symbol, frame in frames.items():
+                visible_rows = frame[frame["datetime"] <= timestamp_value]
+                if visible_rows.empty:
+                    continue
+                row = visible_rows.iloc[-1]
+                marks[symbol] = Decimal(str(row["close"]))
+            total_value = portfolio.total_market_value(marks)
+            first_mark = next(iter(marks.values()), Decimal("0"))
             visible_timestamps.append(timestamp)
             equity_curve.append(
                 EquityPoint(
-                    timestamp, Decimal(str(row["close"])), portfolio.cash,
-                    portfolio.quantity,
-                    portfolio.quantity * Decimal(str(row["close"])),
-                    portfolio.equity(Decimal(str(row["close"]))),
+                    timestamp, first_mark, portfolio.cash,
+                    sum(portfolio.positions.values(), Decimal("0")),
+                    total_value, portfolio.cash + total_value,
                 )
             )
-            signal = self.strategy.generate_signal(
-                visible, config.symbol, current_position=portfolio,
-                simulation_time=timestamp, cutoff=timestamp,
-            )
-            if signal.action == SignalAction.HOLD:
-                continue
-            sequence += 1
-            next_index = next(
-                (
-                    candidate for candidate in range(index + 1, len(frame))
-                    if frame.iloc[candidate]["bar_status"] == "FINAL"
-                ),
-                None,
-            )
-            if next_index is None:
-                orders.append(adapter.cancel(
-                    signal.action, timestamp, "no next finalized bar", sequence
-                ))
-                continue
-            next_row = frame.iloc[next_index]
-            next_open = Decimal(str(next_row["open"]))
-            risk = self.risk_evaluator.evaluate_trade(
-                {"current_cash": portfolio.cash},
-                config.symbol,
-                signal.action.value,
-                config.quantity,
-                next_open,
-                {config.symbol: portfolio.quantity},
-            )
-            if not risk.allowed:
-                rejected.append({
-                    "signal_id": signal.signal_id,
-                    "timestamp": timestamp,
-                    "action": signal.action.value,
-                    "reasons": list(risk.reasons),
-                })
-                continue
-            order, execution, realized_pnl = adapter.execute(
-                signal.action, timestamp,
-                next_row["datetime"].to_pydatetime(),
-                next_open, config.quantity, signal.reason, sequence,
-            )
-            orders.append(order)
-            executions.append(execution)
-            if signal.action == SignalAction.BUY and entry_time is None:
-                entry_time = execution.executed_at
-                entry_price = execution.price
-            elif signal.action == SignalAction.SELL and entry_time is not None:
-                closed_trades.append(
-                    ClosedTrade(
-                        config.symbol, "BUY_SELL", execution.quantity,
-                        entry_time, execution.executed_at, entry_price,
-                        execution.price, realized_pnl,
-                    )
+            for symbol in config.symbols:
+                frame = frames[symbol]
+                visible = frame[frame["datetime"] <= timestamp_value].copy()
+                if visible.empty or visible.iloc[-1]["datetime"] != timestamp_value:
+                    continue
+                signal = self.strategy.generate_signal(
+                    visible, symbol, current_position=portfolio,
+                    simulation_time=timestamp, cutoff=timestamp,
                 )
-                entry_time = None
-                entry_price = Decimal("0")
+                if signal.action == SignalAction.HOLD:
+                    continue
+                sequence += 1
+                future = frame[
+                    (frame["datetime"] > timestamp_value) &
+                    (frame["bar_status"] == "FINAL")
+                ]
+                if future.empty:
+                    orders.append(adapter.cancel(
+                        signal.action, timestamp, "no next finalized bar", sequence, symbol
+                    ))
+                else:
+                    self._pending.append((
+                        future.iloc[0]["datetime"], symbol, signal, timestamp, sequence
+                    ))
 
-        final_price = Decimal(str(frame.iloc[-1]["close"])) if len(frame) else Decimal("0")
-        final_equity = portfolio.equity(final_price) if len(frame) else portfolio.cash
+        final_equity = equity_curve[-1].total_equity if equity_curve else portfolio.cash
         metrics = self._metrics(config.initial_cash, final_equity, equity_curve, closed_trades)
         return BacktestResult(
             config, config.symbol, config.initial_cash, portfolio.cash, final_equity,
@@ -135,8 +151,9 @@ class BacktestEngine:
             rejected, visible_timestamps,
             equity_curve[0].timestamp if equity_curve else None,
             equity_curve[-1].timestamp if equity_curve else None,
-            len(frame), len(orders), len(executions),
+            len(timeline), len(orders), len(executions),
             sum(1 for order in orders if order.status == BacktestOrderStatus.CANCELLED),
+            dict(portfolio.positions),
         )
 
     @staticmethod

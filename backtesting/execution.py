@@ -30,7 +30,9 @@ class BacktestExecutionAdapter:
         quantity: Decimal,
         reason: str,
         sequence: int,
+        symbol: str = "",
     ):
+        symbol = symbol or self.config.symbol
         side = action.value
         if open_price <= 0:
             raise ValueError("execution price must be greater than 0")
@@ -44,23 +46,24 @@ class BacktestExecutionAdapter:
         fill_price = open_price * multiplier
         fee = fill_price * quantity * self.config.commission_rate
         order = BacktestOrder(
-            "backtest-order-{}".format(sequence), self.config.symbol, side, quantity,
+            "backtest-order-{}".format(sequence), symbol, side, quantity,
             signal_time, execution_time, BacktestOrderStatus.FILLED, reason,
         )
         if action == SignalAction.BUY:
-            self.portfolio.apply_buy(quantity, fill_price, fee)
+            self.portfolio.apply_buy_for(symbol, quantity, fill_price, fee)
         else:
-            realized_pnl = self.portfolio.apply_sell(quantity, fill_price, fee)
+            realized_pnl = self.portfolio.apply_sell_for(symbol, quantity, fill_price, fee)
         execution = BacktestExecution(
             "backtest-execution-{}".format(sequence), order.order_id,
-            self.config.symbol, side, quantity,
+            symbol, side, quantity,
             fill_price, fee, execution_time,
         )
         return order, execution, (realized_pnl if action == SignalAction.SELL else Decimal("0"))
 
-    def cancel(self, action, signal_time, reason, sequence):
+    def cancel(self, action, signal_time, reason, sequence, symbol=""):
+        symbol = symbol or self.config.symbol
         return BacktestOrder(
-            "backtest-order-{}".format(sequence), self.config.symbol, action.value,
+            "backtest-order-{}".format(sequence), symbol, action.value,
             self.config.quantity, signal_time, signal_time,
             BacktestOrderStatus.CANCELLED, reason,
         )
