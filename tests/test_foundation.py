@@ -19,6 +19,6 @@ def test_database_initialization_creates_foundation_tables(tmp_path) -> None:
     account_columns = {
         column["name"]: column for column in inspector.get_columns("accounts")
     }
-    assert {"initial_funds", "current_cash"} <= account_columns.keys()
-    assert account_columns["initial_funds"]["nullable"] is False
+    assert {"initial_cash", "current_cash"} <= account_columns.keys()
+    assert account_columns["initial_cash"]["nullable"] is False
     assert account_columns["current_cash"]["nullable"] is False
