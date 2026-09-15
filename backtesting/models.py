@@ -215,3 +215,4 @@ class BacktestResult:
     execution_count: int
     cancelled_count: int
     positions: Dict[str, Decimal]
+    bar_sources: Dict[str, tuple] = field(default_factory=dict)

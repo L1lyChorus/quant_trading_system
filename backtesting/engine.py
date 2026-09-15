@@ -20,7 +20,7 @@ from backtesting.models import (
     BacktestOrderStatus,
 )
 from data.service import MarketDataService
-from data.validation import validate_market_data
+from data.validation import DataValidationError, validate_market_data
 from risk_management.evaluator import RiskEvaluator
 from strategies.base import Strategy
 from strategies.signals import SignalAction
@@ -41,12 +41,19 @@ class BacktestEngine:
 
     def run(self, config: BacktestConfig) -> BacktestResult:
         frames = {}
+        bar_sources = {}
         for symbol in config.symbols:
+            bars = self.market_data.get_historical_bars(
+                symbol, config.start_date, config.end_date, True
+            )
+            bar_sources[symbol] = tuple(sorted({
+                getattr(bar, "source", "")
+                for bar in bars
+                if getattr(bar, "source", "")
+            }))
             frames[symbol] = self._frame(
-                self.market_data.get_historical_bars(
-                    symbol, config.start_date, config.end_date, config.finalized_only
-                ),
-                config.finalized_only,
+                bars,
+                True,
             )
         timeline = sorted({
             row["datetime"]
@@ -154,6 +161,7 @@ class BacktestEngine:
             len(timeline), len(orders), len(executions),
             sum(1 for order in orders if order.status == BacktestOrderStatus.CANCELLED),
             dict(portfolio.positions),
+            bar_sources,
         )
 
     @staticmethod
@@ -209,6 +217,10 @@ class BacktestEngine:
         ])
         if frame.empty:
             return frame
+        if frame.duplicated(["symbol", "datetime"]).any():
+            raise DataValidationError(
+                "backtest bars contain duplicate symbol/datetime records"
+            )
         normalized = validate_market_data(frame)
         normalized = normalized.merge(
             frame[["symbol", "datetime", "bar_status"]],

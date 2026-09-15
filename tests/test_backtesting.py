@@ -215,8 +215,8 @@ def test_zero_slippage_is_exact_next_open_and_runs_are_reproducible():
 
 def test_config_controls_intraday_visibility_but_execution_still_uses_next_final_bar():
     result, data = run(finalized_only=False)
-    assert data.calls[0][3] is False
-    assert result.bar_count == 4
+    assert data.calls[0][3] is True
+    assert result.bar_count == 3
     assert all(execution.executed_at.date().isoformat() != "2024-01-03"
                for execution in result.executions)
 
@@ -390,3 +390,37 @@ def test_multi_asset_result_is_reproducible_and_single_api_remains_compatible():
     single, _ = run()
     assert single.symbol == "600000.SH"
     assert single.positions == {"600000.SH": Decimal("1")}
+
+
+def test_duplicate_symbol_datetime_bars_are_rejected():
+    duplicate = bars() + [bars()[0]]
+    data = FakeMarketData(duplicate)
+    try:
+        BacktestEngine(data, BuyOnFirstVisibleBar()).run(
+            BacktestConfig("600000", Decimal("1000"))
+        )
+    except ValueError as exc:
+        assert "duplicate symbol/datetime" in str(exc)
+    else:
+        raise AssertionError("duplicate bars were silently accepted")
+
+
+def test_equity_accounting_invariant_holds_for_each_portfolio_point():
+    result, _ = multi_run()
+    for point in result.equity_curve:
+        assert point.cash + point.position_market_value == point.total_equity
+
+
+def test_result_retains_bar_source_metadata():
+    class Sourced(MultiMarketData):
+        def get_historical_bars(self, symbol, *args, **kwargs):
+            rows = super().get_historical_bars(symbol, *args, **kwargs)
+            for row in rows:
+                row.source = "LOCAL"
+            return rows
+
+    data = Sourced(multi_bars())
+    result = BacktestEngine(data, BuyEachSymbol()).run(
+        BacktestConfig(["600000", "000001"], Decimal("100"))
+    )
+    assert result.bar_sources == {"000001.SZ": ("LOCAL",), "600000.SH": ("LOCAL",)}
