@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from database.models import Account, Execution, Order, OrderStatus, Position
 from trading.repository import TradingRepository
+from data.symbols import normalize_symbol
 
 logger = logging.getLogger(__name__)
 ZERO = Decimal("0")
@@ -68,7 +69,7 @@ class PaperTradingService:
         requested_price: Decimal,
         signal_id: Optional[str] = None,
     ) -> TradeResult:
-        symbol = symbol.strip().upper()
+        symbol = normalize_symbol(symbol)
         quantity = Decimal(quantity)
         price = Decimal(requested_price)
         order = Order(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from data.a_share import MarketDataError
 from data.health import FreshnessStatus, assess_market_freshness
+from data.symbols import a_share_code, normalize_symbol
 from market_calendar import MarketSession, session_status
 
 
@@ -57,11 +59,13 @@ class TencentMarketDataProvider(MarketDataProvider):
     source = "Tencent quote"
 
     def fetch_quote(self, symbol: str) -> MarketQuote:
-        symbol = symbol.strip().upper()
-        if not re.match(r"^[036]\d{5}$", symbol):
-            raise MarketDataError("A-share symbol must be six digits")
-        market = "sz" if symbol.startswith(("0", "3")) else "sh"
-        url = "https://qt.gtimg.cn/q={}{}".format(market, symbol)
+        try:
+            symbol = normalize_symbol(symbol)
+            code = a_share_code(symbol)
+        except ValueError as exc:
+            raise MarketDataError(str(exc)) from exc
+        market = "sz" if symbol.endswith(".SZ") else "sh"
+        url = "https://qt.gtimg.cn/q={}{}".format(market, code)
         fetched = datetime.now(timezone.utc)
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "quant-trading-system/1.0"})
@@ -102,15 +106,22 @@ class TencentMarketDataProvider(MarketDataProvider):
 
 class EastmoneyMarketDataProvider(MarketDataProvider):
     source = "Eastmoney quote"
-    url = (
-        "https://push2.eastmoney.com/api/qt/stock/get?"
-        "secid=1.600000&fields=f57,f58,f43,f46,f44,f45,f47,f48,f60,f86"
-    )
+    endpoint = "https://push2.eastmoney.com/api/qt/stock/get"
 
     def fetch_quote(self, symbol: str = "600000") -> MarketQuote:
+        try:
+            symbol = normalize_symbol(symbol)
+            code = a_share_code(symbol)
+        except ValueError as exc:
+            raise MarketDataError(str(exc)) from exc
+        market = "1" if symbol.endswith(".SH") else "0"
+        url = self.endpoint + "?" + urllib.parse.urlencode({
+            "secid": "{}.{}".format(market, code),
+            "fields": "f57,f58,f43,f46,f44,f45,f47,f48,f60,f86",
+        })
         fetched = datetime.now(timezone.utc)
         try:
-            request = urllib.request.Request(self.url, headers={"User-Agent": "Mozilla/5.0"})
+            request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (OSError, ValueError) as exc:
@@ -128,7 +139,7 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
         if market_status.endswith("_DELAYED"):
             status = FreshnessStatus.DELAYED
         return MarketQuote(
-            str(data["f57"]), data.get("f58"), scaled("f43"), scaled("f46"),
+            normalize_symbol(str(data["f57"])), data.get("f58"), scaled("f43"), scaled("f46"),
             scaled("f44"), scaled("f45"), scaled("f60"), data.get("f47"),
             data.get("f48"), None, fetched, self.source, market_status, status, age,
         )

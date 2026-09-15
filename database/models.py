@@ -8,7 +8,8 @@ from enum import Enum as PythonEnum
 from typing import Optional
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, TypeDecorator, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+from data.symbols import normalize_symbol
 
 
 def utc_now() -> datetime:
@@ -17,6 +18,10 @@ def utc_now() -> datetime:
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
+
+
+def canonical_symbol(value: str) -> str:
+    return normalize_symbol(value)
 
 
 class UTCDateTime(TypeDecorator):
@@ -90,6 +95,10 @@ class Order(Base):
     account: Mapped[Account] = relationship(back_populates="orders")
     executions: Mapped[list[Execution]] = relationship(back_populates="order")
 
+    @validates("symbol")
+    def validate_symbol(self, key: str, value: str) -> str:
+        return canonical_symbol(value)
+
 
 class Execution(Base):
     __tablename__ = "executions"
@@ -109,6 +118,10 @@ class Execution(Base):
     )
     order: Mapped[Order] = relationship(back_populates="executions")
 
+    @validates("symbol")
+    def validate_symbol(self, key: str, value: str) -> str:
+        return canonical_symbol(value)
+
 
 class Position(Base):
     __tablename__ = "positions"
@@ -126,6 +139,10 @@ class Position(Base):
     def average_price(self) -> Decimal:
         """Backward-compatible name for the cost basis."""
         return self.average_cost
+
+    @validates("symbol")
+    def validate_symbol(self, key: str, value: str) -> str:
+        return canonical_symbol(value)
 
 
 class NewsItem(Base):
@@ -165,3 +182,8 @@ class MarketBar(Base):
     volume: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
     source: Mapped[str] = mapped_column(String(200), nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    bar_status: Mapped[str] = mapped_column(String(16), default="UNKNOWN", nullable=False)
+
+    @validates("symbol")
+    def validate_symbol(self, key: str, value: str) -> str:
+        return canonical_symbol(value)

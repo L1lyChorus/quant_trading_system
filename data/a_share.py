@@ -10,6 +10,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from data.health import FreshnessStatus, MarketHealthResult, assess_market_freshness
+from data.symbols import a_share_code, normalize_symbol
 
 
 class MarketDataError(RuntimeError):
@@ -38,11 +39,13 @@ class TencentAShareProvider:
         self.timeout = timeout
 
     def fetch_quote(self, symbol: str) -> AShareQuote:
-        normalized = symbol.strip().upper()
-        if not re.match(r"^[036]\d{5}$", normalized):
-            raise MarketDataError("A-share symbol must be six digits")
-        market = "sz" if normalized.startswith(("0", "3")) else "sh"
-        url = self.url_template.format(market=market, symbol=normalized)
+        try:
+            normalized = normalize_symbol(symbol)
+            code = a_share_code(normalized)
+        except ValueError as exc:
+            raise MarketDataError(str(exc)) from exc
+        market = "sz" if normalized.endswith(".SZ") else "sh"
+        url = self.url_template.format(market=market, symbol=code)
         fetched = datetime.now(timezone.utc)
         try:
             request = urllib.request.Request(

@@ -9,6 +9,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from data.validation import REQUIRED_COLUMNS, validate_market_data
+from data.symbols import normalize_symbol
 from strategies.base import Strategy
 from strategies.signals import Signal, SignalAction
 
@@ -35,7 +36,7 @@ class MovingAverageCrossoverStrategy(Strategy):
         cutoff: Optional[datetime] = None,
     ) -> Signal:
         del current_position
-        requested_symbol = symbol.strip().upper()
+        requested_symbol = normalize_symbol(symbol)
         if not requested_symbol:
             raise ValueError("symbol is required")
         if not isinstance(market_data, pd.DataFrame):

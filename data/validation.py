@@ -7,6 +7,8 @@ from typing import List
 
 import pandas as pd
 
+from data.symbols import normalize_symbol
+
 REQUIRED_COLUMNS = (
     "symbol",
     "datetime",
@@ -16,7 +18,7 @@ REQUIRED_COLUMNS = (
     "close",
     "volume",
 )
-_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9._-]+$")
+_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9._-]+$", re.IGNORECASE)
 
 
 class DataValidationError(ValueError):
@@ -24,7 +26,7 @@ class DataValidationError(ValueError):
 
 
 def _normalize_symbols(symbols: pd.Series) -> pd.Series:
-    normalized = symbols.astype("string").str.strip().str.upper()
+    normalized = symbols.astype("string").str.strip()
     invalid = normalized.isna() | (normalized == "") | ~normalized.str.match(
         _SYMBOL_PATTERN, na=False
     )
@@ -48,8 +50,12 @@ def validate_market_data(data: pd.DataFrame) -> pd.DataFrame:
 
     normalized = data.loc[:, REQUIRED_COLUMNS].copy()
     normalized["symbol"] = _normalize_symbols(normalized["symbol"])
+    try:
+        normalized["symbol"] = normalized["symbol"].map(normalize_symbol)
+    except ValueError as exc:
+        raise DataValidationError(str(exc)) from exc
     normalized["datetime"] = pd.to_datetime(
-        normalized["datetime"], errors="coerce", utc=True
+        normalized["datetime"], errors="coerce", utc=True, format="mixed"
     )
     if normalized["datetime"].isna().any():
         raise DataValidationError("datetime contains invalid ISO 8601 values")

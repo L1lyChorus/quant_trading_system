@@ -169,12 +169,21 @@ positive OHLC values, non-negative volume, timestamps, and symbols; deduplicates
 `market_bars` SQLite table. Each row stores `source` and UTC `fetched_at`, and
 the unique key makes repeated or incremental updates safe.
 
-The official Shanghai Stock Exchange site was reachable during investigation,
-but no stable public calendar-download endpoint was identified. Tushare
-documents `trade_cal` as a calendar source but requires an API token and at
-least 2000 points. Yahoo Finance's chart endpoint was tested for `600000.SS`
-and returned HTTP 403 in this environment. Therefore this stage does not claim
-a verified remote historical OHLCV feed: `USER_CSV` is the supported and
-verified provider, and users must obtain/export data from a licensed or
-otherwise trusted source. The project does not fabricate holidays or treat a
+Internally, A-share identifiers are canonicalized to `600000.SH`/`000001.SZ`
+(legacy six-digit inputs remain accepted at the API boundary). Quote adapters
+only produce quote objects; historical adapters produce OHLCV bars. Eastmoney
+is the primary historical upstream and Sina is the independent fallback
+upstream; their HTTP transport and upstream names are retained in fetch
+results. A primary `EMPTY`, `ERROR`, or `UNAVAILABLE` result permits fallback,
+while the selected result's actual source and the primary reason are preserved.
+
+The historical service supports Eastmoney as the primary daily OHLCV provider
+and Sina as the fallback, while `USER_CSV` remains available for trusted local
+exports. Provider results are explicit `SUCCESS`, `EMPTY`, `ERROR`, or
+`UNAVAILABLE` outcomes; each persisted bar records its actual source,
+`FINAL`/`INTRADAY`/`UNKNOWN` status, and UTC `fetched_at`. A fallback result
+retains the primary failure reason. Incremental updates begin at the latest
+stored `symbol`/`datetime` and the database unique constraint prevents
+duplicate bars; the latest date is requested again so an unfinished intraday
+bar can be replaced by a later final bar. The project does not fabricate holidays or treat a
 failed/unknown source as trading data.

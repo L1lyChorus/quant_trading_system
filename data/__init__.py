@@ -11,12 +11,20 @@ from data.market import (
 from data.health import FreshnessStatus, MarketHealthResult
 from data.csv_reader import DuplicatePolicy, read_market_csv
 from data.validation import REQUIRED_COLUMNS, DataValidationError, validate_market_data
+from data.symbols import a_share_code, normalize_symbol
 from data.historical import (
+    BarStatus,
+    EastmoneyHistoricalDataProvider,
     HistoricalDataError,
+    HistoricalFetchResult,
+    HistoricalFetchStatus,
     HistoricalDataProvider,
     HistoricalDataService,
+    PrimaryFallbackHistoricalDataProvider,
+    SinaHistoricalDataProvider,
     UserCSVHistoricalDataProvider,
 )
+from data.service import MarketDataService
 
 __all__ = [
     "DuplicatePolicy",
@@ -33,8 +41,17 @@ __all__ = [
     "PrimaryFallbackMarketProvider",
     "read_market_csv",
     "validate_market_data",
+    "normalize_symbol",
+    "a_share_code",
     "HistoricalDataError",
+    "HistoricalFetchStatus",
+    "HistoricalFetchResult",
+    "BarStatus",
     "HistoricalDataProvider",
     "HistoricalDataService",
     "UserCSVHistoricalDataProvider",
+    "EastmoneyHistoricalDataProvider",
+    "SinaHistoricalDataProvider",
+    "PrimaryFallbackHistoricalDataProvider",
+    "MarketDataService",
 ]

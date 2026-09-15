@@ -21,10 +21,29 @@ def test_eastmoney_unknown_timestamp(monkeypatch):
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def read(self): return payload
-    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: Response())
-    quote = EastmoneyMarketDataProvider().fetch_quote()
+    requests = []
+    def open_request(request, **kwargs):
+        requests.append(request.full_url)
+        return Response()
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    quote = EastmoneyMarketDataProvider().fetch_quote("000001.SZ")
     assert quote.freshness_status == FreshnessStatus.UNKNOWN
     assert quote.data_timestamp is None
+    assert "secid=0.000001" in requests[0]
+
+
+def test_eastmoney_empty_primary_uses_fallback():
+    class Empty(TencentMarketDataProvider):
+        def fetch_quote(self, symbol):
+            raise MarketDataError("empty primary")
+
+    class Working(TencentMarketDataProvider):
+        def fetch_quote(self, symbol):
+            return "fallback-quote"
+
+    quote, source = PrimaryFallbackMarketProvider(Empty(), Working()).fetch_quote("600000")
+    assert quote == "fallback-quote"
+    assert source.startswith("FALLBACK_AFTER_ERROR")
 
 
 def test_market_calendar_weekend_and_sessions():

@@ -17,6 +17,7 @@ from strategies.base import Strategy
 from strategies.signals import Signal, SignalAction
 from trading.repository import TradingRepository
 from trading.service import PaperTradingService, TradeResult
+from data.symbols import normalize_symbol
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class TradingEngine:
             position = (
                 current_position
                 if current_position is not None
-                else self.repository.get_position(account_id, symbol.strip().upper())
+                else self.repository.get_position(account_id, normalize_symbol(symbol))
             )
             signal = self.strategy.generate_signal(
                 market_data,
