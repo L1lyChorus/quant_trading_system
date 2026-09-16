@@ -68,6 +68,49 @@ class JsonCalendarProvider(CalendarProvider):
         return sorted(set(days))
 
 
+class TushareCalendarProvider(CalendarProvider):
+    """Tushare Pro implementation of the A-share trading calendar."""
+
+    def __init__(self, token: str | None = None, client=None) -> None:
+        if client is not None:
+            self.client = client
+            return
+
+        if not token:
+            raise ValueError("Tushare token is required")
+
+        import tushare as ts
+
+        self.client = ts.pro_api(token)
+
+    def fetch_trading_days(self, year: int) -> List[date]:
+        frame = self.client.trade_cal(
+            exchange="SSE",
+            start_date=f"{year}0101",
+            end_date=f"{year}1231",
+        )
+
+        if frame is None or len(frame) == 0:
+            return []
+
+        days: List[date] = []
+
+        for _, row in frame.iterrows():
+            if int(row["is_open"]) != 1:
+                continue
+
+            raw_date = str(row["cal_date"])
+            days.append(
+                date(
+                    int(raw_date[:4]),
+                    int(raw_date[4:6]),
+                    int(raw_date[6:8]),
+                )
+            )
+
+        return sorted(set(days))
+
+
 class CalendarSyncService:
     """Synchronize remote calendar data into the local CSV format."""
 
