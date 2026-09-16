@@ -11,3 +11,4 @@ __pycache__/
 *.sqlite3
 .DS_Store
 logs/
+README.backup.md
