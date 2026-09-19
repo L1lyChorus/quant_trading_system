@@ -1,4 +1,4 @@
-# Quant Trading System
+#  SignalForge
 
 Step 1 establishes the project foundation for a paper-trading MVP. It provides
 configuration, logging, SQLite schema initialization, and package boundaries for
